@@ -20,36 +20,50 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
-HF_API_URL = "https://api-inference.huggingface.co/models/openai/clip-vit-base-patch32"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-label_map = {
-    "a photo of a completely dry motorsport race track, even with dark shadows cast on the asphalt": "dry race track",
-    "a photo of a slightly damp motorsport race track with some wet patches": "damp race track",
-    "a photo of a wet motorsport race track with heavy rain and standing water": "wet race track",
-    "a photo of a drying motorsport race track with a clear dry racing line": "drying race track"
-}
-candidate_prompts = list(label_map.keys())
-
-def query_huggingface(image_bytes):
-    if not HF_API_KEY:
-        raise HTTPException(status_code=500, detail="HUGGINGFACE_API_KEY not set in environment")
+def query_gemini(image_bytes):
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not set in environment")
     
-    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     
-    # Send image as base64 and parameters as JSON for zero-shot classification
     image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+    
+    prompt = """
+    You are an AI analyzing a racing track surface.
+    Analyze the image and return ONLY a valid JSON array. Do not include markdown formatting or backticks.
+    The array must contain exactly two objects, one for 'dry' and one for 'wet'.
+    Each object must have 'label' (string) and 'score' (float between 0.0 and 1.0 representing your confidence).
+    The scores must add up to 1.0.
+    Example output: [{"label": "dry", "score": 0.1}, {"label": "wet", "score": 0.9}]
+    """
+
     payload = {
-        "inputs": image_base64,
-        "parameters": {"candidate_labels": candidate_prompts}
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {"inline_data": {"mime_type": "image/jpeg", "data": image_base64}}
+            ]
+        }]
     }
     
-    response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=15)
+    response = requests.post(url, json=payload, timeout=15)
     
     if response.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Hugging Face API returned error: {response.text}")
+        raise HTTPException(status_code=502, detail=f"Gemini API error: {response.text}")
         
-    return response.json()
+    data = response.json()
+    try:
+        # Extract the raw text from the Gemini response
+        text_response = data['candidates'][0]['content']['parts'][0]['text']
+        # Clean any markdown formatting if present
+        text_response = text_response.strip().removeprefix('```json').removesuffix('```').strip()
+        import json
+        results = json.loads(text_response)
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to parse Gemini response: {str(e)} - Raw: {data}")
 
 @app.post("/analyze-track")
 async def analyze_track(file: UploadFile = File(...)):
@@ -57,17 +71,9 @@ async def analyze_track(file: UploadFile = File(...)):
         # Read image bytes
         image_bytes = await file.read()
         
-        # Call Hugging Face API
-        hf_response = query_huggingface(image_bytes)
+        # Call Gemini API
+        results = query_gemini(image_bytes)
         
-        # Format results: HF API returns a list of dictionaries like [{"score": 0.9, "label": "prompt..."}, ...]
-        results = []
-        for item in hf_response:
-            prompt = item.get("label", "")
-            score = item.get("score", 0.0)
-            # Map the full prompt back to the shorter label
-            results.append({"label": label_map.get(prompt, prompt), "score": score})
-            
         return results
         
     except HTTPException as he:
@@ -91,17 +97,9 @@ async def analyze_camera_url(request: CameraRequest):
         response.raise_for_status()
         
         image_bytes = response.content
+        # Call Gemini API
+        results = query_gemini(image_bytes)
         
-        # Call Hugging Face API
-        hf_response = query_huggingface(image_bytes)
-        
-        # Format results
-        results = []
-        for item in hf_response:
-            prompt = item.get("label", "")
-            score = item.get("score", 0.0)
-            results.append({"label": label_map.get(prompt, prompt), "score": score})
-            
         return results
         
     except requests.exceptions.RequestException as e:

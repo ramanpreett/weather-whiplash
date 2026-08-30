@@ -6,8 +6,33 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel
 import requests
+import socket
+
+# --- DNS BYPASS HACK FOR RENDER ---
+# Render's free tier has a known DNS bug resolving Hugging Face.
+# We bypass this by manually resolving it via Google's DNS over HTTPS.
+try:
+    print("Attempting to resolve Hugging Face API via Google DoH...")
+    doh_resp = requests.get('https://dns.google/resolve?name=api-inference.huggingface.co&type=A', timeout=5)
+    data = doh_resp.json()
+    ips = [answer['data'] for answer in data.get('Answer', []) if answer['type'] == 1]
+    if ips:
+        hf_ip = ips[0]
+        print(f"Successfully resolved api-inference.huggingface.co to {hf_ip}")
+        
+        # Patch python's socket resolution
+        original_getaddrinfo = socket.getaddrinfo
+        def new_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+            if host == 'api-inference.huggingface.co':
+                return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (hf_ip, port))]
+            return original_getaddrinfo(host, port, family, type, proto, flags)
+        socket.getaddrinfo = new_getaddrinfo
+except Exception as e:
+    print(f"DNS Bypass failed, falling back to system DNS: {e}")
+# ----------------------------------
 
 load_dotenv()
+
 
 app = FastAPI()
 

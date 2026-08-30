@@ -70,9 +70,13 @@ async def analyze_track(file: UploadFile = File(...)):
             
         return results
         
-    except HTTPException:
+    except HTTPException as he:
+        print(f"HTTPException in analyze_track: {he.detail}")
         raise
     except Exception as e:
+        print(f"Server Error in analyze_track: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Server Error: {str(e)}")
 
 class CameraRequest(BaseModel):

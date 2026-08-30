@@ -4,6 +4,8 @@ import base64
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from pydantic import BaseModel
+import requests
 from PIL import Image
 from transformers import CLIPProcessor, CLIPModel
 
@@ -28,7 +30,7 @@ model = CLIPModel.from_pretrained(model_id)
 print("Model loaded successfully!")
 
 label_map = {
-    "a photo of a completely dry motorsport race track on a clear day": "dry race track",
+    "a photo of a completely dry motorsport race track, even with dark shadows cast on the asphalt": "dry race track",
     "a photo of a slightly damp motorsport race track with some wet patches": "damp race track",
     "a photo of a wet motorsport race track with heavy rain and standing water": "wet race track",
     "a photo of a drying motorsport race track with a clear dry racing line": "drying race track"
@@ -59,6 +61,42 @@ async def analyze_track(file: UploadFile = File(...)):
         results.sort(key=lambda x: x["score"], reverse=True)
         return results
         
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Local Model Error: {str(e)}")
+
+class CameraRequest(BaseModel):
+    url: str
+
+@app.post("/analyze-camera-url")
+async def analyze_camera_url(request: CameraRequest):
+    try:
+        # Download image from IP camera
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(request.url, headers=headers, timeout=5)
+        response.raise_for_status()
+        
+        image_bytes = response.content
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        
+        # Process image and labels
+        inputs = processor(text=candidate_prompts, images=image, return_tensors="pt", padding=True)
+        
+        # Run inference
+        outputs = model(**inputs)
+        logits_per_image = outputs.logits_per_image
+        probs = logits_per_image.softmax(dim=1).detach().numpy()[0]
+        
+        # Format results
+        results = []
+        for prompt, prob in zip(candidate_prompts, probs):
+            results.append({"label": label_map[prompt], "score": float(prob)})
+            
+        # Sort by score descending
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results
+        
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch image from camera: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Local Model Error: {str(e)}")
 

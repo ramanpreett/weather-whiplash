@@ -29,15 +29,21 @@ function App() {
   const [error, setError] = useState(null);
   const fileInputRef = useRef(null);
 
+  const [isIpCamera, setIsIpCamera] = useState(false);
+  const [cameraUrl, setCameraUrl] = useState(null);
   const [isVideo, setIsVideo] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const videoRef = useRef(null);
   const intervalRef = useRef(null);
 
+  const API_URL_CAMERA = 'http://localhost:8000/analyze-camera-url';
+
   const handleImageUpload = async (event) => {
     const file = event.target.files[0];
     if (!file) return;
 
+    setIsIpCamera(false);
+    setCameraUrl(null);
     const isVideoFile = file.type.startsWith('video/');
     setIsVideo(isVideoFile);
     setSelectedImage(URL.createObjectURL(file));
@@ -45,6 +51,22 @@ function App() {
     
     if (!isVideoFile) {
       await analyzeImage(file, false);
+    }
+  };
+
+  const handleConnectIpCamera = () => {
+    let url = window.prompt('Enter IP Camera URL (e.g., http://192.168.1.55:8080):');
+    if (url) {
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = 'http://' + url;
+      }
+      const cleanUrl = url.endsWith('/') ? url.slice(0, -1) : url;
+      setIsIpCamera(true);
+      setIsVideo(false);
+      setCameraUrl(cleanUrl);
+      setSelectedImage(`${cleanUrl}/video`);
+      setHistoryData([]);
+      setIsPlaying(true); // Start analysis
     }
   };
 
@@ -67,15 +89,59 @@ function App() {
   };
 
   useEffect(() => {
-    if (isVideo && isPlaying) {
+    if (isVideo && isPlaying && !isIpCamera) {
       intervalRef.current = setInterval(() => {
         processVideoFrame();
+      }, 2000);
+    } else if (isIpCamera && isPlaying) {
+      intervalRef.current = setInterval(() => {
+        analyzeIpCameraFrame();
       }, 2000);
     } else {
       clearInterval(intervalRef.current);
     }
     return () => clearInterval(intervalRef.current);
-  }, [isVideo, isPlaying]);
+  }, [isVideo, isPlaying, isIpCamera, cameraUrl]);
+
+  const processAnalysisResults = (data) => {
+    const topLabel = data.reduce((prev, current) => (prev.score > current.score) ? prev : current);
+    
+    let wetnessScore = 0;
+    if (topLabel.label === 'wet race track') wetnessScore = 90 + (topLabel.score * 10);
+    else if (topLabel.label === 'damp race track') wetnessScore = 60 + (topLabel.score * 10);
+    else if (topLabel.label === 'drying race track') wetnessScore = 30 + (topLabel.score * 10);
+    else wetnessScore = 10 - (topLabel.score * 10); 
+
+    const newEntry = {
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      condition: topLabel.label,
+      confidence: topLabel.score,
+      wetness: Math.max(0, Math.min(100, Math.round(wetnessScore)))
+    };
+
+    setCurrentStatus(newEntry);
+    setHistoryData(prev => [...prev.slice(-19), newEntry]); 
+  };
+
+  const analyzeIpCameraFrame = async () => {
+    try {
+      const response = await fetch(API_URL_CAMERA, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: `${cameraUrl}/shot.jpg` }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.detail || `Error: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      processAnalysisResults(data);
+    } catch (err) {
+      console.error("IP camera analysis error:", err);
+    }
+  };
 
   const analyzeImage = async (file, silent = false) => {
     if (!silent) setIsAnalyzing(true);
@@ -92,23 +158,7 @@ function App() {
       if (!response.ok) throw new Error(`Error: ${response.statusText}`);
 
       const data = await response.json();
-      const topLabel = data.reduce((prev, current) => (prev.score > current.score) ? prev : current);
-      
-      let wetnessScore = 0;
-      if (topLabel.label === 'wet race track') wetnessScore = 90 + (topLabel.score * 10);
-      else if (topLabel.label === 'damp race track') wetnessScore = 60 + (topLabel.score * 10);
-      else if (topLabel.label === 'drying race track') wetnessScore = 30 + (topLabel.score * 10);
-      else wetnessScore = 10 - (topLabel.score * 10); 
-
-      const newEntry = {
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        condition: topLabel.label,
-        confidence: topLabel.score,
-        wetness: Math.max(0, Math.min(100, Math.round(wetnessScore)))
-      };
-
-      setCurrentStatus(newEntry);
-      setHistoryData(prev => [...prev.slice(-19), newEntry]); 
+      processAnalysisResults(data);
 
     } catch (err) {
       if (!silent) setError(err.message);
@@ -301,10 +351,16 @@ function App() {
             
             <div className="mt-6 flex flex-col items-center">
               <input type="file" accept="image/*,video/*" className="hidden" ref={fileInputRef} onChange={handleImageUpload} />
-              <button className="primary-btn w-full justify-center py-5 rounded-none" onClick={() => fileInputRef.current.click()} disabled={isAnalyzing}>
-                <Upload size={20} />
-                {isAnalyzing ? 'Processing...' : (selectedImage ? 'Upload New Feed' : 'Connect Camera Feed')}
-              </button>
+              <div className="flex gap-4 w-full">
+                <button className="primary-btn flex-1 justify-center py-5 rounded-none text-sm" onClick={() => fileInputRef.current.click()} disabled={isAnalyzing}>
+                  <Upload size={18} />
+                  Upload Feed
+                </button>
+                <button className="primary-btn flex-1 justify-center py-5 rounded-none text-sm bg-blue-600 hover:bg-blue-700 border-blue-500" onClick={handleConnectIpCamera} disabled={isAnalyzing}>
+                  <Cloud size={18} />
+                  IP Camera
+                </button>
+              </div>
               <AnimatePresence>
                 {error && (
                   <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="mt-4 p-4 bg-red-950/50 border border-red-500/30 rounded-xl w-full flex items-start gap-3">

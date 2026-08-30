@@ -6,8 +6,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel
 import requests
-from PIL import Image
-from transformers import CLIPProcessor, CLIPModel
 
 load_dotenv()
 
@@ -22,12 +20,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-print("Loading Hugging Face CLIP model locally (this may take a few seconds)...")
-# Using the local transformer model bypasses all DNS and API endpoint issues!
-model_id = "openai/clip-vit-base-patch32"
-processor = CLIPProcessor.from_pretrained(model_id)
-model = CLIPModel.from_pretrained(model_id)
-print("Model loaded successfully!")
+HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
+HF_API_URL = "https://api-inference.huggingface.co/models/openai/clip-vit-base-patch32"
 
 label_map = {
     "a photo of a completely dry motorsport race track, even with dark shadows cast on the asphalt": "dry race track",
@@ -37,32 +31,49 @@ label_map = {
 }
 candidate_prompts = list(label_map.keys())
 
+def query_huggingface(image_bytes):
+    if not HF_API_KEY:
+        raise HTTPException(status_code=500, detail="HUGGINGFACE_API_KEY not set in environment")
+    
+    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+    
+    # Send image as base64 and parameters as JSON for zero-shot classification
+    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+    payload = {
+        "inputs": image_base64,
+        "parameters": {"candidate_labels": candidate_prompts}
+    }
+    
+    response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=15)
+    
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Hugging Face API returned error: {response.text}")
+        
+    return response.json()
+
 @app.post("/analyze-track")
 async def analyze_track(file: UploadFile = File(...)):
     try:
         # Read image bytes
         image_bytes = await file.read()
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         
-        # Process image and labels
-        inputs = processor(text=candidate_prompts, images=image, return_tensors="pt", padding=True)
+        # Call Hugging Face API
+        hf_response = query_huggingface(image_bytes)
         
-        # Run inference
-        outputs = model(**inputs)
-        logits_per_image = outputs.logits_per_image
-        probs = logits_per_image.softmax(dim=1).detach().numpy()[0]
-        
-        # Format results
+        # Format results: HF API returns a list of dictionaries like [{"score": 0.9, "label": "prompt..."}, ...]
         results = []
-        for prompt, prob in zip(candidate_prompts, probs):
-            results.append({"label": label_map[prompt], "score": float(prob)})
+        for item in hf_response:
+            prompt = item.get("label", "")
+            score = item.get("score", 0.0)
+            # Map the full prompt back to the shorter label
+            results.append({"label": label_map.get(prompt, prompt), "score": score})
             
-        # Sort by score descending
-        results.sort(key=lambda x: x["score"], reverse=True)
         return results
         
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Local Model Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server Error: {str(e)}")
 
 class CameraRequest(BaseModel):
     url: str
@@ -76,29 +87,25 @@ async def analyze_camera_url(request: CameraRequest):
         response.raise_for_status()
         
         image_bytes = response.content
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         
-        # Process image and labels
-        inputs = processor(text=candidate_prompts, images=image, return_tensors="pt", padding=True)
-        
-        # Run inference
-        outputs = model(**inputs)
-        logits_per_image = outputs.logits_per_image
-        probs = logits_per_image.softmax(dim=1).detach().numpy()[0]
+        # Call Hugging Face API
+        hf_response = query_huggingface(image_bytes)
         
         # Format results
         results = []
-        for prompt, prob in zip(candidate_prompts, probs):
-            results.append({"label": label_map[prompt], "score": float(prob)})
+        for item in hf_response:
+            prompt = item.get("label", "")
+            score = item.get("score", 0.0)
+            results.append({"label": label_map.get(prompt, prompt), "score": score})
             
-        # Sort by score descending
-        results.sort(key=lambda x: x["score"], reverse=True)
         return results
         
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=400, detail=f"Failed to fetch image from camera: {str(e)}")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Local Model Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server Error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

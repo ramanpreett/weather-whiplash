@@ -20,13 +20,15 @@ try:
         hf_ip = ips[0]
         print(f"Successfully resolved api-inference.huggingface.co to {hf_ip}")
         
-        # Patch python's socket resolution
+        # Patch python's socket resolution AND urllib3's cached reference
+        import urllib3.util.connection
         original_getaddrinfo = socket.getaddrinfo
         def new_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
             if host == 'api-inference.huggingface.co':
                 return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (hf_ip, port))]
             return original_getaddrinfo(host, port, family, type, proto, flags)
         socket.getaddrinfo = new_getaddrinfo
+        urllib3.util.connection.getaddrinfo = new_getaddrinfo
 except Exception as e:
     print(f"DNS Bypass failed, falling back to system DNS: {e}")
 # ----------------------------------

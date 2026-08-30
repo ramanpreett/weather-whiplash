@@ -58,7 +58,7 @@ def query_gemini(image_bytes):
     response = requests.post(url, json=payload, timeout=15)
     
     if response.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Gemini API error: {response.text}")
+        raise HTTPException(status_code=response.status_code, detail=f"Gemini API error: {response.text}")
         
     data = response.json()
     try:

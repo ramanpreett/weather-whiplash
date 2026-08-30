@@ -93,11 +93,11 @@ function App() {
     if (isVideo && isPlaying && !isIpCamera) {
       intervalRef.current = setInterval(() => {
         processVideoFrame();
-      }, 2000);
+      }, 5000); // 5 seconds to stay under 15 RPM Gemini free tier limit
     } else if (isIpCamera && isPlaying) {
       intervalRef.current = setInterval(() => {
         analyzeIpCameraFrame();
-      }, 2000);
+      }, 5000); // 5 seconds to stay under 15 RPM Gemini free tier limit
     } else {
       clearInterval(intervalRef.current);
     }

@@ -33,10 +33,17 @@ def query_gemini(image_bytes):
     prompt = """
     You are an AI analyzing a racing track surface.
     Analyze the image and return ONLY a valid JSON array. Do not include markdown formatting or backticks.
-    The array must contain exactly two objects, one for 'dry' and one for 'wet'.
+    The array must contain exactly four objects representing these exact classifications: 
+    'dry race track', 'damp race track', 'drying race track', and 'wet race track'.
     Each object must have 'label' (string) and 'score' (float between 0.0 and 1.0 representing your confidence).
-    The scores must add up to 1.0.
-    Example output: [{"label": "dry", "score": 0.1}, {"label": "wet", "score": 0.9}]
+    The scores must add up to exactly 1.0.
+    Example output: 
+    [
+        {"label": "dry race track", "score": 0.05},
+        {"label": "damp race track", "score": 0.15},
+        {"label": "drying race track", "score": 0.05},
+        {"label": "wet race track", "score": 0.75}
+    ]
     """
 
     payload = {

@@ -4,7 +4,8 @@ import { Upload, CloudRain, Sun, Cloud, RefreshCw, Activity, AlertTriangle, Chev
 import { motion, AnimatePresence } from 'framer-motion';
 import './index.css';
 
-const API_URL = 'http://localhost:8000/analyze-track';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+const API_URL = `${BACKEND_URL}/analyze-track`;
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
@@ -36,7 +37,7 @@ function App() {
   const videoRef = useRef(null);
   const intervalRef = useRef(null);
 
-  const API_URL_CAMERA = 'http://localhost:8000/analyze-camera-url';
+  const API_URL_CAMERA = `${BACKEND_URL}/analyze-camera-url`;
 
   const handleImageUpload = async (event) => {
     const file = event.target.files[0];
